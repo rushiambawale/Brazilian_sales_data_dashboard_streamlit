@@ -6,7 +6,6 @@ import os
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
-from datetime import timedelta
 
 st.set_page_config(page_title="E-Commerce Dashboard", layout="wide")
 
@@ -23,7 +22,6 @@ def load_orders(zip_path="orders_cleaned.zip", extract_path="orders_data"):
 
     for file in os.listdir(extract_path):
         if file.endswith(".csv"):
-            # Properly closed parentheses
             df = pd.read_csv(os.path.join(extract_path, file))
             df['order_purchase_timestamp'] = pd.to_datetime(df['order_purchase_timestamp'], errors='coerce')
             return df
@@ -81,17 +79,19 @@ st.success("✅ Data loaded successfully!")
 # Unified Layout
 # --------------------------
 st.title("E-Commerce Analytics Dashboard")
-st.header("📊 Forecasting, RFM & Recommendations")
-
 tabs = st.tabs(["Forecasting", "RFM Table", "Recommendations"])
 
 # ==========================
-# Forecasting Tab
+# 1️⃣ Forecasting Tab
 # ==========================
 with tabs[0]:
-    st.subheader("1️⃣ Sales Forecasting")
+    st.subheader("📈 Sales Forecasting")
 
-    # Prepare monthly sales
+    orders['order_purchase_timestamp'] = pd.to_datetime(
+        orders['order_purchase_timestamp'], errors='coerce'
+    )
+
+    # Aggregate monthly sales
     monthly_sales = (
         orders.groupby([pd.Grouper(key='order_purchase_timestamp', freq='M'), 'product_id'])
         .agg({'total_price': 'sum'})
@@ -99,12 +99,17 @@ with tabs[0]:
         .rename(columns={'total_price': 'sales'})
     )
 
-    forecast_periods = st.slider("Select months to forecast", 1, 12, 3)
     product_list = monthly_sales['product_id'].unique()
     selected_product = st.selectbox("Select Product ID", product_list)
+    forecast_periods = st.slider("Select months to forecast", 1, 12, 3)
 
     product_sales = monthly_sales[monthly_sales['product_id'] == selected_product].copy()
-    if not product_sales.empty:
+    product_sales = product_sales.sort_values('order_purchase_timestamp')
+
+    # Ensure enough data
+    if len(product_sales) < 6:
+        st.warning("Not enough data to forecast this product (need at least 6 months).")
+    else:
         product_sales['month'] = product_sales['order_purchase_timestamp'].dt.month
         product_sales['year'] = product_sales['order_purchase_timestamp'].dt.year
 
@@ -114,25 +119,33 @@ with tabs[0]:
         product_sales['lag_3'] = product_sales['sales'].shift(3)
         product_sales['rolling_mean_3'] = product_sales['sales'].rolling(3).mean()
         product_sales['rolling_mean_6'] = product_sales['sales'].rolling(6).mean()
-        product_sales.dropna(inplace=True)
 
-        # Random Forest Forecast
-        X = product_sales[['month','year','lag_1','lag_2','lag_3','rolling_mean_3','rolling_mean_6']]
-        y = product_sales['sales']
-        model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
-        model.fit(X, y)
-        product_sales['Predicted_Sales'] = model.predict(X)
+        # Clean NaN / inf values
+        product_sales = product_sales.dropna()
+        product_sales = product_sales.replace([np.inf, -np.inf], np.nan).dropna()
 
-        st.line_chart(product_sales[['sales','Predicted_Sales']].rename(columns={'sales':'Actual','Predicted_Sales':'Predicted'}))
-        st.dataframe(product_sales[['order_purchase_timestamp','sales','Predicted_Sales']])
-    else:
-        st.warning("No sales data available for forecasting.")
+        if len(product_sales) < 3:
+            st.warning("Not enough clean data after lag/rolling features to forecast.")
+        else:
+            X = product_sales[['month','year','lag_1','lag_2','lag_3','rolling_mean_3','rolling_mean_6']]
+            y = product_sales['sales']
+
+            model = RandomForestRegressor(n_estimators=300, max_depth=10, random_state=42)
+            model.fit(X, y)
+            product_sales['Predicted_Sales'] = model.predict(X)
+
+            st.line_chart(
+                product_sales[['sales','Predicted_Sales']].rename(
+                    columns={'sales':'Actual','Predicted_Sales':'Predicted'}
+                )
+            )
+            st.dataframe(product_sales[['order_purchase_timestamp','sales','Predicted_Sales']])
 
 # ==========================
-# RFM Tab
+# 2️⃣ RFM Table Tab
 # ==========================
 with tabs[1]:
-    st.subheader("2️⃣ Customer RFM Analysis")
+    st.subheader("Customer RFM Analysis")
 
     rfm = rfm_segments.copy()
     if 'RFM_Score' not in rfm.columns:
@@ -162,10 +175,10 @@ with tabs[1]:
     st.dataframe(rfm[['customer_id','Recency','Frequency','Monetary','Segment']])
 
 # ==========================
-# Recommendation Tab
+# 3️⃣ Recommendation Tab
 # ==========================
 with tabs[2]:
-    st.subheader("3️⃣ Product Recommendation")
+    st.subheader("Product Recommendation")
 
     prod_df = products.drop_duplicates(subset='product_id').copy()
     prod_df = pd.get_dummies(prod_df, columns=['product_category_name'])
