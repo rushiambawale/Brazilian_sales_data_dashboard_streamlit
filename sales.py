@@ -36,9 +36,7 @@ def load_orders(zip_path="orders_cleaned.zip", extract_path="orders_data"):
 def load_other_data(rfm_path="rfm_segments.csv", product_path="product_master.csv"):
     if not os.path.exists(rfm_path) or not os.path.exists(product_path):
         return None, None
-    rfm_df = pd.read_csv(rfm_path)
-    product_df = pd.read_csv(product_path)
-    return rfm_df, product_df
+    return pd.read_csv(rfm_path), pd.read_csv(product_path)
 
 # --------------------------
 # Load data
@@ -78,7 +76,42 @@ if rfm_segments is None or products is None:
 st.success("✅ Data loaded successfully!")
 
 # ==========================
-# Layout
+# 📊 E-COMMERCE KPIs
+# ==========================
+st.markdown("## 📊 E-Commerce KPIs")
+
+orders['order_purchase_timestamp'] = pd.to_datetime(
+    orders['order_purchase_timestamp'], errors='coerce'
+)
+
+total_revenue = orders['total_price'].sum()
+total_orders = orders.shape[0]
+aov = total_revenue / total_orders if total_orders > 0 else 0
+profit_margin = 0.20
+total_profit = total_revenue * profit_margin
+
+monthly_revenue = (
+    orders
+    .groupby(pd.Grouper(key='order_purchase_timestamp', freq='M'))
+    .agg({'total_price': 'sum'})
+    .rename(columns={'total_price': 'revenue'})
+)
+
+monthly_revenue['growth_pct'] = monthly_revenue['revenue'].pct_change() * 100
+latest_growth = monthly_revenue['growth_pct'].iloc[-1]
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("💰 Total Revenue", f"₹ {total_revenue:,.0f}")
+col2.metric("🧾 Avg Order Value (AOV)", f"₹ {aov:,.0f}")
+col3.metric("📈 Total Profit", f"₹ {total_profit:,.0f}")
+col4.metric(
+    "🚀 Revenue Growth (MoM)",
+    "0%" if pd.isna(latest_growth) else f"{latest_growth:.2f}%"
+)
+
+# ==========================
+# Layout Tabs
 # ==========================
 st.title("E-Commerce Analytics Dashboard")
 tabs = st.tabs(["Forecasting", "RFM Table", "Recommendations"])
@@ -98,9 +131,9 @@ with tabs[0]:
         .rename(columns={'total_price': 'sales'})
     )
 
-    product_list = monthly_sales['product_id'].unique()
-    selected_product = st.selectbox("Select Product ID", product_list)
-    forecast_periods = st.slider("Select months to forecast", 1, 12, 3)
+    selected_product = st.selectbox(
+        "Select Product ID", monthly_sales['product_id'].unique()
+    )
 
     product_sales = monthly_sales[
         monthly_sales['product_id'] == selected_product
@@ -141,24 +174,24 @@ with tabs[0]:
         )
 
 # ==========================
-# 2️⃣ RFM Table Tab (WITH DROPDOWN)
+# 2️⃣ RFM Table Tab
 # ==========================
 with tabs[1]:
     st.subheader("Customer RFM Analysis")
 
     rfm = rfm_segments.copy()
 
-    if 'RFM_Score' not in rfm.columns:
-        rfm['R_score'] = pd.qcut(rfm['Recency'], 5, labels=[5,4,3,2,1])
-        rfm['F_score'] = pd.qcut(
-            rfm['Frequency'].rank(method='first'), 5, labels=[1,2,3,4,5]
-        )
-        rfm['M_score'] = pd.qcut(rfm['Monetary'], 5, labels=[1,2,3,4,5])
-        rfm['RFM_Score'] = (
-            rfm['R_score'].astype(str) +
-            rfm['F_score'].astype(str) +
-            rfm['M_score'].astype(str)
-        )
+    rfm['R_score'] = pd.qcut(rfm['Recency'], 5, labels=[5,4,3,2,1])
+    rfm['F_score'] = pd.qcut(
+        rfm['Frequency'].rank(method='first'), 5, labels=[1,2,3,4,5]
+    )
+    rfm['M_score'] = pd.qcut(rfm['Monetary'], 5, labels=[1,2,3,4,5])
+
+    rfm['RFM_Score'] = (
+        rfm['R_score'].astype(str) +
+        rfm['F_score'].astype(str) +
+        rfm['M_score'].astype(str)
+    )
 
     def segment_customer(row):
         r, f, m = int(row['RFM_Score'][0]), int(row['RFM_Score'][1]), int(row['RFM_Score'][2])
@@ -173,8 +206,10 @@ with tabs[1]:
 
     rfm['Segment'] = rfm.apply(segment_customer, axis=1)
 
-    segment_list = ['All'] + sorted(rfm['Segment'].unique())
-    selected_segment = st.selectbox("Select Customer Segment", segment_list)
+    selected_segment = st.selectbox(
+        "Select Customer Segment",
+        ['All'] + sorted(rfm['Segment'].unique())
+    )
 
     if selected_segment != 'All':
         rfm = rfm[rfm['Segment'] == selected_segment]
@@ -206,7 +241,7 @@ with tabs[2]:
 
     def get_recommendation(product_id, top_n=5):
         vector = prod_df.loc[product_id].values.reshape(1, -1)
-        distances, indices = knn.kneighbors(vector, n_neighbors=top_n+1)
+        _, indices = knn.kneighbors(vector, n_neighbors=top_n+1)
         rec_ids = prod_df.index[indices[0][1:]]
         return products[
             products['product_id'].isin(rec_ids)
