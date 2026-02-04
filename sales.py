@@ -172,6 +172,25 @@ with tabs[1]:
             return 'Lost Customers'
 
     rfm['Segment'] = rfm.apply(segment_customer, axis=1)
+    # --------------------------
+# Segment Filter Dropdown
+# --------------------------
+segment_list = ['All'] + sorted(rfm['Segment'].unique().tolist())
+
+selected_segment = st.selectbox(
+    "Select Customer Segment",
+    segment_list
+)
+
+if selected_segment != 'All':
+    filtered_rfm = rfm[rfm['Segment'] == selected_segment]
+else:
+    filtered_rfm = rfm
+
+st.dataframe(
+    filtered_rfm[['customer_id','Recency','Frequency','Monetary','Segment']]
+)
+
     st.dataframe(rfm[['customer_id','Recency','Frequency','Monetary','Segment']])
 
 # ==========================
